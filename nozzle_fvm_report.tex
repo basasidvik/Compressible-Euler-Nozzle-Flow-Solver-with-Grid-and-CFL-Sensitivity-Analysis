@@ -1,0 +1,498 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{amsmath,amssymb,booktabs,geometry,graphicx,xcolor}
+\usepackage{listings}
+\usepackage{hyperref}
+\geometry{margin=1in}
+
+\definecolor{codegray}{RGB}{245,245,245}
+\definecolor{commentgreen}{RGB}{35,120,55}
+\lstset{
+  language=C,
+  basicstyle=\ttfamily\small,
+  backgroundcolor=\color{codegray},
+  commentstyle=\color{commentgreen},
+  keywordstyle=\color{blue},
+  numbers=left,
+  numberstyle=\tiny\color{gray},
+  frame=single,
+  breaklines=true,
+  columns=fullflexible
+}
+
+\title{Grid-Refinement and CFL-Sensitivity Studies of the\\
+Quasi-One-Dimensional Compressible Euler Equations\\
+in a Convergent--Divergent Nozzle}
+\author{Computational Fluid Dynamics Project}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This report documents a time-marching, cell-centred finite-volume solution of
+the quasi-one-dimensional compressible Euler equations in a convergent--divergent
+nozzle. The implementation uses a first-order Rusanov flux and an explicit
+CFL-controlled pseudo-time step. The accompanying case files support grid-
+refinement studies with 100, 200, and 400 cells and CFL-sensitivity studies with
+CFL numbers 0.2, 0.5, 0.8, and 1.0. The solver outputs pressure, Mach number,
+flow variables, and residual histories for reproducible analysis.
+\end{abstract}
+
+\tableofcontents
+
+\section{Project objective}
+The objective is to compute the steady flow through a convergent--divergent
+nozzle by advancing the compressible Euler equations in pseudo-time. Two
+numerical studies are performed:
+\begin{enumerate}
+  \item \textbf{Grid refinement:} quantify how the numerical solution changes
+        as the number of cells is increased.
+  \item \textbf{CFL sensitivity:} compare stability and convergence rate for
+        CFL numbers $0.2$, $0.5$, $0.8$, and $1.0$.
+\end{enumerate}
+
+The code is intentionally quasi-one-dimensional. This retains the principal
+physics of acceleration, choking, and internal shocks while allowing the effect
+of numerical resolution and time-step selection to be isolated clearly.
+
+\section{Governing equations}
+Let $x$ denote the axial coordinate and $A(x)$ the nozzle cross-sectional area.
+The conservative quasi-one-dimensional Euler equations are
+\begin{equation}
+  \frac{\partial \mathbf U}{\partial t}
+  + \frac{\partial \mathbf F}{\partial x}
+  = \mathbf S,
+\end{equation}
+where the area-weighted conservative state is
+\begin{equation}
+  \mathbf U =
+  \begin{bmatrix}
+    \rho A\\
+    \rho u A\\
+    \rho E A
+  \end{bmatrix},
+\end{equation}
+the flux is
+\begin{equation}
+  \mathbf F =
+  \begin{bmatrix}
+    \rho u A\\
+    (\rho u^2+p)A\\
+    u(\rho E+p)A
+  \end{bmatrix},
+\end{equation}
+and the geometric source term is
+\begin{equation}
+  \mathbf S =
+  \begin{bmatrix}
+    0\\
+    p\,\dfrac{dA}{dx}\\
+    0
+  \end{bmatrix}.
+\end{equation}
+
+For a calorically perfect gas,
+\begin{equation}
+  E = \frac{p}{\gamma-1}+\frac{1}{2}\rho u^2,
+  \qquad
+  a = \sqrt{\frac{\gamma p}{\rho}},
+  \qquad
+  M = \frac{|u|}{a},
+\end{equation}
+where $a$ is the speed of sound and $M$ is the Mach number.
+
+\section{Nozzle geometry}
+The nozzle is one metre long and has its throat at $x_t=0.4$ m. The area is
+defined piecewise as a quadratic contraction and expansion:
+\begin{equation}
+A(x)=
+\begin{cases}
+A_t+(A_i-A_t)\left(\dfrac{x}{x_t}\right)^2, & 0\leq x\leq x_t,\\[1.2ex]
+A_t+(A_e-A_t)\left(\dfrac{x-x_t}{L-x_t}\right)^2,
+&x_t < x\leq L.
+\end{cases}
+\end{equation}
+
+The values used in the study are
+\begin{table}[h]
+\centering
+\caption{Nozzle and gas conditions.}
+\begin{tabular}{lll}
+\toprule
+Quantity & Symbol & Value \\
+\midrule
+Specific heat ratio & $\gamma$ & $1.4$ \\
+Gas constant & $R$ & $287.05$ J/(kg K) \\
+Inlet stagnation pressure & $p_0$ & $101325$ Pa \\
+Inlet stagnation temperature & $T_0$ & $300$ K \\
+Back pressure & $p_b$ & $30000$ Pa \\
+Nozzle length & $L$ & $1.0$ m \\
+Throat position & $x_t$ & $0.4$ m \\
+Inlet area & $A_i$ & $0.020$ m$^2$ \\
+Throat area & $A_t$ & $0.010$ m$^2$ \\
+Exit area & $A_e$ & $0.016$ m$^2$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Finite-volume discretization}
+The domain is divided into $N$ uniform cells with width
+\begin{equation}
+  \Delta x = \frac{L}{N}.
+\end{equation}
+Integrating the governing equation over cell $i$ gives
+\begin{equation}
+  \frac{d\mathbf U_i}{dt}
+  = -\frac{\mathbf F_{i+1/2}-\mathbf F_{i-1/2}}{\Delta x}
+    + \mathbf S_i.
+\end{equation}
+
+The explicit forward-Euler update used by the code is
+\begin{equation}
+  \mathbf U_i^{n+1}=\mathbf U_i^n
+  -\frac{\Delta t}{\Delta x}
+   \left(\mathbf F_{i+1/2}^n-\mathbf F_{i-1/2}^n\right)
+  +\Delta t\,\mathbf S_i^n.
+\end{equation}
+The source term is evaluated as
+\begin{equation}
+  \mathbf S_i =
+  \begin{bmatrix}
+    0\\p_i A'_i\\0
+  \end{bmatrix}.
+\end{equation}
+
+\subsection{Rusanov numerical flux}
+At each face, the left and right primitive states are used to compute
+\begin{equation}
+  \mathbf F_{i+1/2} = \frac{1}{2}
+  \left(\mathbf F_L+\mathbf F_R\right)
+  -\frac{1}{2}s_{\max}\left(\mathbf U_R-\mathbf U_L\right),
+\end{equation}
+where
+\begin{equation}
+  s_{\max}=\max\left(|u_L|+a_L,\ |u_R|+a_R\right).
+\end{equation}
+The Rusanov flux is robust and simple, although it is numerically diffusive,
+particularly around shocks.
+
+\subsection{CFL time step}
+The time step is selected from the largest characteristic speed in the domain:
+\begin{equation}
+  \Delta t = \mathrm{CFL}\,
+  \min_i\left(\frac{\Delta x}{|u_i|+a_i}\right).
+\end{equation}
+The CFL number controls the amount of pseudo-time advancement per iteration.
+Large values can reduce the number of iterations, but may cause oscillation or
+instability for an explicit scheme.
+
+\section{Initial and boundary conditions}
+The initial condition is a stationary, uniform flow at the inlet stagnation
+state:
+\begin{equation}
+  \rho_0=\frac{p_0}{RT_0},\qquad u_0=0,\qquad p_0=101325\ \mathrm{Pa}.
+\end{equation}
+
+At the inlet, a reservoir state $(\rho_0,0,p_0)$ is supplied to the numerical
+flux. At the outlet, density and velocity are extrapolated from the final cell
+and pressure is set to the prescribed back pressure $p_b$. These simple boundary
+conditions are sufficient for the present study, but characteristic boundary
+conditions would be preferable for a production-quality solver.
+
+\section{Algorithm}
+The main time-marching loop is:
+\begin{enumerate}
+  \item Read a case file and construct cell-centre and face areas.
+  \item Initialize every cell with the inlet stagnation state.
+  \item Recover $(\rho,u,p)$ and calculate the CFL-limited time step.
+  \item Construct left and right states at every face.
+  \item Evaluate Rusanov fluxes.
+  \item Add the area-gradient momentum source term.
+  \item Update all conservative variables from step $n$ to step $n+1$.
+  \item Record the residual and stop when it is below the requested tolerance.
+\end{enumerate}
+
+The residual recorded by the implementation is the average absolute change in
+the three conservative variables:
+\begin{equation}
+  R^n=\frac{1}{N}\sum_{i=1}^{N}\sum_{k=1}^{3}
+  \left|U_{i,k}^{n+1}-U_{i,k}^{n}\right|.
+\end{equation}
+
+\section{Input cases}
+All case files are in the \texttt{cases/} directory. The grid-refinement matrix
+holds all physical conditions and CFL number fixed while changing $N$:
+\begin{table}[h]
+\centering
+\caption{Grid-refinement cases.}
+\begin{tabular}{llll}
+\toprule
+Case & Cells & CFL & Output prefix \\
+\midrule
+\texttt{grid\_100.cfg} & 100 & 0.5 & \texttt{grid\_100} \\
+\texttt{grid\_200.cfg} & 200 & 0.5 & \texttt{grid\_200} \\
+\texttt{grid\_400.cfg} & 400 & 0.5 & \texttt{grid\_400} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The CFL matrix holds the 200-cell grid and all physical conditions fixed:
+\begin{table}[h]
+\centering
+\caption{CFL-sensitivity cases.}
+\begin{tabular}{llll}
+\toprule
+Case & Cells & CFL & Output prefix \\
+\midrule
+\texttt{cfl\_02.cfg} & 200 & 0.2 & \texttt{cfl\_02} \\
+\texttt{cfl\_05.cfg} & 200 & 0.5 & \texttt{cfl\_05} \\
+\texttt{cfl\_08.cfg} & 200 & 0.8 & \texttt{cfl\_08} \\
+\texttt{cfl\_10.cfg} & 200 & 1.0 & \texttt{cfl\_10} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Build and execution}
+Compile the solver with:
+\begin{lstlisting}[language=bash]
+cc -std=c11 -O2 -Wall -Wextra -pedantic nozzle_fvm.c -lm -o nozzle_fvm
+\end{lstlisting}
+
+Run one case with:
+\begin{lstlisting}[language=bash]
+./nozzle_fvm cases/baseline.cfg
+\end{lstlisting}
+
+Generate the complete data set with:
+\begin{lstlisting}[language=bash]
+for f in cases/grid_*.cfg; do ./nozzle_fvm "$f"; done
+for f in cases/cfl_*.cfg; do ./nozzle_fvm "$f"; done
+\end{lstlisting}
+
+Each case creates two comma-separated files:
+\begin{itemize}
+  \item \texttt{<prefix>.csv}: $x$, area, density, velocity, pressure, and Mach number;
+  \item \texttt{<prefix>\_residual.csv}: iteration number, residual, and time step.
+\end{itemize}
+
+\section{Study methodology}
+\subsection{Grid refinement}
+For each grid, compare the final pressure and Mach profiles. Interpolate the
+coarser solution onto the finest-grid coordinates before computing an error:
+\begin{equation}
+  \|p\|_{L_1} = \frac{1}{N}\sum_i |p_i^{(N)}-p_i^{(\mathrm{fine})}|,
+  \qquad
+  \|p\|_{L_2} =
+  \left[\frac{1}{N}\sum_i
+  \left(p_i^{(N)}-p_i^{(\mathrm{fine})}\right)^2\right]^{1/2}.
+\end{equation}
+The same comparison can be made for Mach number. If an internal shock is
+present, estimate its position from the location of the largest magnitude
+pressure or Mach-number gradient. Because the present scheme is first-order,
+shock position and shock thickness will converge slowly.
+
+\subsection{CFL sensitivity}
+For each CFL number, compare:
+\begin{itemize}
+  \item number of iterations required to reach the residual tolerance;
+  \item residual decay as a function of iteration;
+  \item minimum pressure and density, as positivity indicators;
+  \item final pressure and Mach profiles;
+  \item whether the run reaches a stable steady state.
+\end{itemize}
+The expected trade-off is that larger CFL numbers require fewer iterations when
+stable, but may produce oscillations or fail to converge. In the supplied
+configuration, CFL $=1.0$ is intentionally included as a stability boundary
+test; it does not converge within the configured iteration limit with this
+explicit first-order discretization.
+
+\section{Results and analysis}
+The figures in this section are generated by \texttt{plot\_results.py} from the
+CSV files produced by \texttt{nozzle\_fvm.c}. They are stored in
+\texttt{results/visualizations/} so that the report can be rebuilt without
+manually editing any image.
+
+\subsection{Grid-refinement results}
+All three grid cases converged to the specified residual tolerance. The number
+of iterations increases approximately in proportion to the number of cells,
+because the explicit time step decreases as $\Delta x$ decreases. The final
+iteration counts were 2,656, 5,233, and 10,419 for 100, 200, and 400 cells,
+respectively. This is expected for an explicit pseudo-time method: a finer grid
+has a smaller stable time step even though it gives a more highly resolved
+solution.
+
+\begin{table}[h]
+\centering
+\caption{Grid-refinement convergence results.}
+\begin{tabular}{rrrr}
+\toprule
+Cells & CFL & Iterations & Final residual \\
+\midrule
+100 & 0.5 & 2,656 & $9.9952\times10^{-9}$ \\
+200 & 0.5 & 5,233 & $9.9602\times10^{-9}$ \\
+400 & 0.5 & 10,419 & $9.9858\times10^{-9}$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Figure~\ref{fig:gridprofiles} shows that the pressure and Mach-number profiles
+approach a common solution as the grid is refined. The shock, when present, is
+spread over several cells by the first-order Rusanov scheme. Therefore, shock
+thickness decreases with grid spacing, while the shock location should be
+compared using a consistent gradient-based definition.
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.92\textwidth]{results/visualizations/grid_profiles.png}
+  \caption{Pressure and Mach-number profiles for the three grid resolutions.}
+  \label{fig:gridprofiles}
+\end{figure}
+
+The residual histories are plotted in Figure~\ref{fig:gridresiduals}. The finer
+grids require more iterations to reach the same residual threshold, but the
+residual histories provide a direct check that all cases converge to a steady
+state rather than merely reaching the maximum iteration count.
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.72\textwidth]{results/visualizations/grid_residuals.png}
+  \caption{Residual histories for the grid-refinement cases.}
+  \label{fig:gridresiduals}
+\end{figure}
+
+\subsection{CFL-sensitivity results}
+The CFL study illustrates the stability--efficiency trade-off of explicit time
+marching. CFL values 0.2, 0.5, and 0.8 converged. Increasing the CFL number
+from 0.2 to 0.8 reduced the iteration count from 12,663 to 3,323. CFL $=1.0$
+did not converge within 20,000 iterations and was therefore not used as a
+steady-state solution for profile comparisons.
+
+\begin{table}[h]
+\centering
+\caption{CFL-sensitivity convergence results on the 200-cell grid.}
+\begin{tabular}{rrrrl}
+\toprule
+CFL & Cells & Iterations & Final residual & Status \\
+\midrule
+0.2 & 200 & 12,663 & $9.9984\times10^{-9}$ & Converged \\
+0.5 & 200 & 5,233 & $9.9602\times10^{-9}$ & Converged \\
+0.8 & 200 & 3,323 & $9.9586\times10^{-9}$ & Converged \\
+1.0 & 200 & 20,000 & $8.47597$ & Not converged \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Figure~\ref{fig:cflresiduals} shows the faster residual decay obtained with
+larger stable CFL values. The CFL $=1.0$ trace is retained because its failure
+is an important result: it identifies a stability limitation of the current
+explicit, first-order algorithm. It should not be interpreted as a physical
+steady solution.
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.72\textwidth]{results/visualizations/cfl_residuals.png}
+  \caption{Residual histories for the CFL-sensitivity study.}
+  \label{fig:cflresiduals}
+\end{figure}
+
+For the converged CFL cases, the final pressure and Mach profiles are nearly
+unchanged, as shown in Figure~\ref{fig:cflprofiles}. This indicates that the
+CFL number changes the path to the steady state more strongly than the final
+solution, provided the run is stable and sufficiently converged.
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.92\textwidth]{results/visualizations/cfl_profiles.png}
+  \caption{Final pressure and Mach-number profiles for converged CFL cases.}
+  \label{fig:cflprofiles}
+\end{figure}
+
+\subsection{Baseline flow visualization}
+Figure~\ref{fig:baseline} combines the nozzle area, normalized pressure, and
+Mach number for the baseline case. It provides a compact numerical check: the
+flow accelerates through the convergent section and responds to the divergent
+geometry downstream. The present baseline should be interpreted cautiously,
+however. Its simple reservoir and fixed-pressure ghost states produce a throat
+Mach number above one rather than exactly the ideal choked value $M=1$. This is
+a boundary-condition/source-discretization validation issue, not evidence that
+the ideal nozzle theory predicts a supersonic throat.
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.78\textwidth]{results/visualizations/baseline_overview.png}
+  \caption{Baseline nozzle geometry and computed flow variables.}
+  \label{fig:baseline}
+\end{figure}
+
+\subsection{Interpretation}
+The results support three conclusions. First, grid refinement changes the
+resolution of the flow features and reduces numerical smearing, but it also
+increases the computational cost of explicit marching. Second, increasing CFL
+from 0.2 to 0.8 improves convergence efficiency for this case without changing
+the converged profile materially. Third, CFL $=1.0$ is outside the practical
+stable range of this implementation, demonstrating why CFL sensitivity must be
+reported alongside the final flow field.
+
+The reported values are numerical results for the specified first-order solver,
+not grid-independent physical truth. A higher-order reconstruction, improved
+boundary conditions, and a well-balanced source-term treatment would be needed
+before making high-accuracy design claims. In particular, before using the
+solver for a final choking-position claim, verify that the throat pressure and
+Mach number recover the critical relations
+\begin{equation}
+  \frac{p^*}{p_0}=\left(\frac{2}{\gamma+1}\right)^{\gamma/(\gamma-1)},
+  \qquad M^*=1,
+\end{equation}
+to the expected discretization error.
+
+\section{Code organization}
+The implementation is contained in \texttt{nozzle\_fvm.c}:
+\begin{description}
+  \item[\texttt{nozzle\_area}] evaluates the piecewise nozzle geometry.
+  \item[\texttt{area\_slope}] evaluates $dA/dx$ for the geometric source.
+  \item[\texttt{primitive\_to\_U}] converts primitive variables to area-weighted conserved variables.
+  \item[\texttt{U\_to\_primitive}] recovers density, velocity, and pressure.
+  \item[\texttt{rusanov\_flux}] calculates the interface flux.
+  \item[\texttt{read\_config}] reads a plain-text case file.
+  \item[\texttt{write\_solution}] writes the final flow field to CSV.
+  \item[\texttt{main}] performs initialization, time marching, residual output, and termination.
+\end{description}
+
+The pressure and density floors in the primitive-variable recovery protect the
+calculation against nonphysical intermediate values during unstable runs. They
+should be treated as diagnostics, not as a replacement for a more advanced
+positivity-preserving scheme.
+
+\section{Limitations and possible extensions}
+The solver is intended for a clear numerical-method study rather than a
+high-fidelity nozzle design tool. Important limitations are:
+\begin{itemize}
+  \item first-order spatial accuracy;
+  \item explicit forward-Euler time integration;
+  \item simple pressure outlet and reservoir inlet conditions;
+  \item non-well-balanced treatment of the area source term;
+  \item no viscous effects, heat transfer, turbulence, or boundary layers.
+\end{itemize}
+
+Natural extensions include MUSCL reconstruction with a limiter, an HLLC flux,
+second-order Runge--Kutta time integration, characteristic boundary conditions,
+and a well-balanced discretization of the area source term. These extensions
+should be added only after the grid and CFL studies are reproducible with the
+present baseline solver.
+
+\section{Reproducibility checklist}
+\begin{enumerate}
+  \item Compile with the command in Section 7.
+  \item Run all files in \texttt{cases/}.
+  \item Preserve the generated CSV files with the case names.
+  \item Record compiler, operating system, grid size, CFL, tolerance, and
+        maximum iteration count.
+  \item Plot residual histories and final pressure/Mach profiles.
+  \item Report non-converged cases separately from converged steady solutions.
+\end{enumerate}
+
+\end{document}
